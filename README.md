@@ -23,6 +23,26 @@ The server supports project tracking, assisted login, page inspection, reference
 - FFmpeg/FFprobe for local media validation
 - A Google account with access to Google Flow
 
+## One-command Claude Code install
+
+macOS, Linux, or WSL:
+
+```bash
+claude mcp add --scope user google-flow -- npx -y google-flow-browser-mcp
+```
+
+Native Windows:
+
+```powershell
+claude mcp add --scope user google-flow -- cmd /c npx -y google-flow-browser-mcp
+```
+
+Confirm the registration, restart Claude Code, and open `/mcp`:
+
+```bash
+claude mcp get google-flow
+```
+
 ## Install from source
 
 ```bash
