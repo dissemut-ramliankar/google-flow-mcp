@@ -1,10 +1,12 @@
 import { spawn } from "node:child_process";
-import { access, mkdir, stat } from "node:fs/promises";
+import { stat } from "node:fs/promises";
 import path from "node:path";
+import { pipeline } from "node:stream/promises";
 
 import { chromium, type BrowserContext, type Download, type Locator, type Page } from "playwright-core";
 
 import type { Config } from "./config.js";
+import { existingFileWithinRoot, newFileWithinRoot } from "./filesystem.js";
 import { StateStore } from "./state.js";
 import type { AuthRecord, FlowMediaItem, PageInspection } from "./types.js";
 
@@ -175,8 +177,7 @@ export class FlowBrowserAdapter {
 
   async uploadFile(input: { filePath: string; inputIndex?: number }): Promise<PageInspection> {
     const page = await this.ensurePage();
-    const absolute = path.resolve(input.filePath);
-    await access(absolute);
+    const absolute = await existingFileWithinRoot(this.assetRoot(), input.filePath, "Upload file");
     const inputs: Locator[] = [];
     for (const frame of page.frames()) {
       const locator = frame.locator("input[type='file']");
@@ -343,14 +344,17 @@ export class FlowBrowserAdapter {
 
   private async saveDownload(download: Download, destinationDirInput: string, fileName: string | undefined, sourceUrl: string) {
     const suggestedFileName = download.suggestedFilename();
-    const requestedName = fileName ? path.basename(fileName) : suggestedFileName;
-    if (!requestedName || requestedName === "." || requestedName === "..") throw new Error("Invalid download file name.");
-    const destinationDir = path.resolve(destinationDirInput);
-    await mkdir(destinationDir, { recursive: true });
-    const destination = path.join(destinationDir, requestedName);
-    await download.saveAs(destination);
+    const destination = await newFileWithinRoot(this.assetRoot(), destinationDirInput, fileName ?? suggestedFileName, "Download");
+    const stream = await download.createReadStream();
+    if (!stream) throw new Error("Flow download stream is unavailable.");
+    const { createWriteStream } = await import("node:fs");
+    await pipeline(stream, createWriteStream(destination, { flags: "wx" }));
     if ((await stat(destination)).size <= 0) throw new Error("Flow download completed with an empty file.");
     return { path: destination, suggestedFileName, sourceUrl };
+  }
+
+  private assetRoot(): string {
+    return this.config.assetDir ?? this.config.dataDir ?? path.dirname(this.config.databaseFile ?? this.config.stateFile);
   }
 
   private validateFlowProjectUrl(projectUrl: string): void {

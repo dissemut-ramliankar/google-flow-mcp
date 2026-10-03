@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { backup, DatabaseSync } from "node:sqlite";
 
+import { newFileWithinRoot } from "./filesystem.js";
 import type { AppState, AssetRecord, JobRecord, ProjectRecord } from "./types.js";
 
 type LegacyState = Omit<AppState, "version" | "assets"> & { version: 1; assets?: AssetRecord[] };
@@ -24,12 +25,14 @@ function deriveDatabasePath(configuredPath: string): string {
 export class StateStore {
   readonly filePath: string;
   readonly legacyJsonPath?: string;
+  readonly dataRoot: string;
   private readonly database: DatabaseSync;
   private queue: Promise<void> = Promise.resolve();
 
-  constructor(databasePath: string, legacyJsonPath?: string) {
+  constructor(databasePath: string, legacyJsonPath?: string, dataRoot?: string) {
     this.filePath = deriveDatabasePath(databasePath);
     this.legacyJsonPath = legacyJsonPath ?? (databasePath.toLowerCase().endsWith(".json") ? databasePath : undefined);
+    this.dataRoot = path.resolve(dataRoot ?? path.dirname(this.filePath));
     mkdirSync(path.dirname(this.filePath), { recursive: true });
     this.database = new DatabaseSync(this.filePath);
     this.database.exec("PRAGMA journal_mode=WAL");
@@ -94,18 +97,24 @@ export class StateStore {
     idempotencyKey: string;
     prompt?: string;
   }): Promise<{ job: JobRecord; reused: boolean }> {
-    const state = await this.read();
-    const existing = state.jobs.find((job) => job.idempotencyKey === input.idempotencyKey && job.state !== "failed");
-    if (existing) return { job: existing, reused: true };
-    const attempt = 1 + Math.max(0, ...state.jobs.filter((job) => job.idempotencyKey === input.idempotencyKey).map((job) => job.attempt));
-    const now = new Date().toISOString();
-    const job: JobRecord = {
-      id: randomUUID(), projectId: input.projectId, provider: "google_flow", operation: input.operation,
-      idempotencyKey: input.idempotencyKey, prompt: input.prompt, state: "draft", attempt, createdAt: now, updatedAt: now,
-    };
-    await this.update((next) => { next.jobs.push(job); });
-    this.recordEvent("job.created", job.id, job);
-    return { job, reused: false };
+    let result: { job: JobRecord; reused: boolean } | undefined;
+    await this.update((state) => {
+      const existing = state.jobs.find((job) => job.idempotencyKey === input.idempotencyKey && job.state !== "failed");
+      if (existing) {
+        result = { job: existing, reused: true };
+        return;
+      }
+      const attempt = 1 + Math.max(0, ...state.jobs.filter((job) => job.idempotencyKey === input.idempotencyKey).map((job) => job.attempt));
+      const now = new Date().toISOString();
+      const job: JobRecord = {
+        id: randomUUID(), projectId: input.projectId, provider: "google_flow", operation: input.operation,
+        idempotencyKey: input.idempotencyKey, prompt: input.prompt, state: "draft", attempt, createdAt: now, updatedAt: now,
+      };
+      state.jobs.push(job);
+      result = { job, reused: false };
+    });
+    if (!result!.reused) this.recordEvent("job.created", result!.job.id, result!.job);
+    return result!;
   }
 
   async updateJob(id: string, patch: Partial<JobRecord>): Promise<JobRecord> {
@@ -166,9 +175,12 @@ export class StateStore {
 
   async backup(destinationPath?: string): Promise<{ path: string; pages: number; bytes: number }> {
     const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-    const destination = path.resolve(destinationPath ?? path.join(path.dirname(this.filePath), "backups", `state-${stamp}.sqlite`));
-    if (existsSync(destination)) throw new Error(`Backup destination already exists: ${destination}`);
-    mkdirSync(path.dirname(destination), { recursive: true });
+    const destination = await newFileWithinRoot(
+      this.dataRoot,
+      destinationPath ? path.dirname(destinationPath) : path.join(this.dataRoot, "backups"),
+      destinationPath ? path.basename(destinationPath) : `state-${stamp}.sqlite`,
+      "Backup destination",
+    );
     const pages = await backup(this.database, destination);
     const target = new DatabaseSync(destination, { readOnly: true });
     try {

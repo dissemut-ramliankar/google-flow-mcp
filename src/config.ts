@@ -7,6 +7,8 @@ export interface Config {
   profileDir: string;
   stateFile: string;
   databaseFile?: string;
+  dataDir?: string;
+  assetDir?: string;
   downloadDir?: string;
 }
 
@@ -43,6 +45,8 @@ export function loadConfig(cwd = process.cwd()): Config {
     profileDir: path.resolve(process.env.FLOW_PROFILE_DIR ?? path.join(dataRoot, "browser-profile")),
     stateFile: path.resolve(process.env.FLOW_STATE_FILE ?? path.join(dataRoot, "state.json")),
     databaseFile: path.resolve(process.env.FLOW_DATABASE_FILE ?? path.join(dataRoot, "state.sqlite")),
-    downloadDir: path.resolve(process.env.FLOW_DOWNLOAD_DIR ?? path.join(dataRoot, "downloads")),
+    dataDir: dataRoot,
+    assetDir: path.resolve(process.env.FLOW_ASSET_DIR ?? path.join(dataRoot, "assets")),
+    downloadDir: path.resolve(process.env.FLOW_DOWNLOAD_DIR ?? path.join(process.env.FLOW_ASSET_DIR ?? path.join(dataRoot, "assets"), "downloads")),
   };
 }

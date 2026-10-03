@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -40,6 +40,20 @@ test("job creation is idempotent and failed retries get a new attempt", async (t
   const retry = await store.createJob({ projectId: project.id, operation: "video", idempotencyKey: key, prompt: "A slow push-in" });
   assert.equal(retry.reused, false);
   assert.equal(retry.job.attempt, 2);
+});
+
+test("concurrent job creation reuses one non-failed job for the same key", async (t) => {
+  const { directory, store } = await fixture();
+  t.after(() => { store.close(); return rm(directory, { recursive: true, force: true }); });
+  const project = await store.createProject({ title: "Demo", brief: "", language: "zh-CN" });
+  const key = `${project.id}:video:0:1`;
+
+  const results = await Promise.all(Array.from({ length: 20 }, () => store.createJob({
+    projectId: project.id, operation: "video", idempotencyKey: key,
+  })));
+
+  assert.equal(new Set(results.map((result) => result.job.id)).size, 1);
+  assert.equal((await store.read()).jobs.filter((job) => job.idempotencyKey === key).length, 1);
 });
 
 test("queued writes remain durable and valid", async (t) => {
@@ -98,4 +112,23 @@ test("SQLite backup is consistent and readable", async (t) => {
     assert.equal((await restored.read()).projects[0].title, "Backup");
     assert.equal(restored.health().integrity, "ok");
   } finally { restored.close(); }
+});
+
+test("SQLite backup rejects destinations outside its data root", async (t) => {
+  const { directory, store } = await fixture();
+  t.after(() => { store.close(); return rm(directory, { recursive: true, force: true }); });
+
+  await assert.rejects(() => store.backup(path.join(path.dirname(directory), "outside.sqlite")), /outside the allowed root/);
+});
+
+test("SQLite backup rejects a symlinked backup directory that escapes its data root", async (t) => {
+  const { directory, store } = await fixture();
+  const outside = await mkdtemp(path.join(os.tmpdir(), "google-flow-mcp-outside-"));
+  t.after(() => { store.close(); return Promise.all([rm(directory, { recursive: true, force: true }), rm(outside, { recursive: true, force: true })]); });
+  await mkdir(path.join(directory, "backups"));
+  await rm(path.join(directory, "backups"), { recursive: true });
+  await symlink(outside, path.join(directory, "backups"));
+
+  await assert.rejects(() => store.backup(path.join(directory, "backups", "nested", "state.sqlite")), /symlink|allowed root/i);
+  assert.deepEqual(await readdir(outside), []);
 });

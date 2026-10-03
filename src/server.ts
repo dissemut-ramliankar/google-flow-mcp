@@ -2,8 +2,10 @@ import { McpServer } from "@modelcontextprotocol/server";
 import * as z from "zod/v4";
 import { existsSync } from "node:fs";
 import { spawnSync } from "node:child_process";
+import path from "node:path";
 
 import type { Config } from "./config.js";
+import { directoryWithinRoot, existingFileWithinRoot } from "./filesystem.js";
 import { FlowBrowserAdapter } from "./flow-adapter.js";
 import { sha256File, validateMedia } from "./media-validator.js";
 import { StateStore } from "./state.js";
@@ -16,7 +18,9 @@ function response(value: unknown) {
 }
 
 export function createGoogleFlowServer(config: Config) {
-  const store = new StateStore(config.databaseFile ?? config.stateFile, config.stateFile);
+  const dataRoot = config.dataDir ?? path.dirname(config.databaseFile ?? config.stateFile);
+  const assetRoot = config.assetDir ?? dataRoot;
+  const store = new StateStore(config.databaseFile ?? config.stateFile, config.stateFile, dataRoot);
   const flow = new FlowBrowserAdapter(config, store);
   const server = new McpServer(
     { name: "google-flow-browser", version: "1.0.0" },
@@ -70,7 +74,7 @@ export function createGoogleFlowServer(config: Config) {
       }),
       annotations: { readOnlyHint: true },
     },
-    async (input) => response(await validateMedia(input.filePath, input)),
+    async (input) => response(await validateMedia(input.filePath, input, assetRoot)),
   );
 
   server.registerTool(
@@ -266,9 +270,10 @@ export function createGoogleFlowServer(config: Config) {
     },
     async ({ projectId, ...input }) => {
       await projectGuard(projectId);
-      const page = await flow.uploadFile(input);
+      const sourcePath = await existingFileWithinRoot(assetRoot, input.filePath, "Upload file");
+      const page = await flow.uploadFile({ ...input, filePath: sourcePath });
       const asset = await store.registerAsset({
-        projectId, kind: "reference", role: input.role, sourcePath: input.filePath, locked: input.locked,
+        projectId, kind: "reference", role: input.role, sourcePath, locked: input.locked,
       });
       return response({ page, asset });
     },
@@ -331,7 +336,8 @@ export function createGoogleFlowServer(config: Config) {
     },
     async ({ projectId, ...input }) => {
       await projectGuard(projectId);
-      return response(await flow.downloadAsset(input));
+      const destinationDir = await directoryWithinRoot(assetRoot, input.destinationDir, "Download destination");
+      return response(await flow.downloadAsset({ ...input, destinationDir }));
     },
   );
 
@@ -363,7 +369,7 @@ export function createGoogleFlowServer(config: Config) {
         projectUrl: project.flowProjectUrl,
         mediaId: mediaId ?? job?.providerMediaId,
         title,
-        destinationDir: destinationDir ?? config.downloadDir ?? "downloads",
+        destinationDir: await directoryWithinRoot(assetRoot, destinationDir ?? config.downloadDir ?? path.join(assetRoot, "downloads"), "Download destination"),
         fileName,
       });
       if (job) await store.updateJob(job.id, {

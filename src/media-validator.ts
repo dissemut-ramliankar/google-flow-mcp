@@ -4,6 +4,7 @@ import { createReadStream, existsSync } from "node:fs";
 import { access } from "node:fs/promises";
 import { promisify } from "node:util";
 
+import { existingFileWithinRoot } from "./filesystem.js";
 const execFileAsync = promisify(execFile);
 
 export interface MediaValidationOptions {
@@ -13,13 +14,14 @@ export interface MediaValidationOptions {
   requireAudio?: boolean;
 }
 
-export async function validateMedia(filePath: string, options: MediaValidationOptions = {}) {
-  await access(filePath);
+export async function validateMedia(filePath: string, options: MediaValidationOptions = {}, assetRoot?: string) {
+  const validatedPath = assetRoot ? await existingFileWithinRoot(assetRoot, filePath, "Media file") : filePath;
+  await access(validatedPath);
   const ffprobe = process.env.FLOW_FFPROBE_EXECUTABLE ?? "ffprobe";
   const { stdout } = await execFileAsync(ffprobe, [
     "-v", "error", "-show_entries",
     "format=format_name,duration,size,bit_rate:stream=index,codec_type,codec_name,width,height,r_frame_rate,sample_rate,channels",
-    "-of", "json", filePath,
+    "-of", "json", validatedPath,
   ], { timeout: 30_000, windowsHide: true, maxBuffer: 2_000_000 });
   const probe = JSON.parse(stdout) as {
     streams?: Array<{ codec_type?: string; codec_name?: string; width?: number; height?: number; r_frame_rate?: string; sample_rate?: string; channels?: number }>;
@@ -51,8 +53,8 @@ export async function validateMedia(filePath: string, options: MediaValidationOp
   }
   return {
     valid: checks.every((check) => check.passed),
-    path: filePath,
-    sha256: await sha256File(filePath),
+    path: validatedPath,
+    sha256: await sha256File(validatedPath),
     format: probe.format,
     video: video ?? null,
     audio: audio ?? null,

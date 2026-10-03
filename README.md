@@ -115,6 +115,7 @@ Override locations with environment variables:
 
 - `FLOW_BROWSER_EXECUTABLE`
 - `FLOW_DATA_DIR`
+- `FLOW_ASSET_DIR`
 - `FLOW_PROFILE_DIR`
 - `FLOW_STATE_FILE`
 - `FLOW_DATABASE_FILE`
@@ -129,6 +130,8 @@ pnpm run check
 pnpm test
 pnpm run health
 ```
+
+See [evaluation hardening and Windows 11/OpenCode guidance](docs/EVALUATION.md) for the reviewed offline test evidence, known limitations, and isolated local setup instructions.
 
 Production maintenance commands:
 
